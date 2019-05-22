@@ -26,7 +26,9 @@
 
   <ItemGroup>
     <PackageReference Include="McMaster.Extensions.CommandLineUtils" Version="2.3.4" />
-    <PackageReference Include="NuGet.ProjectModel" Version="5.1.0-preview2.5965" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="2.2.0" />
+    <PackageReference Include="NuGet.ProjectModel" Version="5.1.0" />
+    <PackageReference Include="NuGet.Resolver" Version="5.1.0" />
   </ItemGroup>
 
 
