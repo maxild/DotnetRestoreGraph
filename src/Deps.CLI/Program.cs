@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics.CodeAnalysis;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -11,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using McMaster.Extensions.CommandLineUtils;
 using Microsoft.Extensions.Logging;
+using NuGet.Common;
 using NuGet.Configuration;
 using NuGet.Frameworks;
 using NuGet.LibraryModel;
@@ -21,6 +21,8 @@ using NuGet.Protocol;
 using NuGet.Protocol.Core.Types;
 using NuGet.Resolver;
 using NuGet.Versioning;
+using ILogger = Microsoft.Extensions.Logging.ILogger;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace Deps.CLI
 {
@@ -34,8 +36,9 @@ namespace Deps.CLI
     {
         public static int Main(string[] args) => CommandLineApplication.Execute<Program>(args);
 
-        private ILogger _logger;
-        private ILoggerFactory _loggerFactory;
+        private readonly ILogger _logger;
+        // ReSharper disable once PrivateFieldCanBeConvertedToLocalVariable
+        private readonly ILoggerFactory _loggerFactory;
 
         public Program()
         {
@@ -130,91 +133,202 @@ namespace Deps.CLI
             if (!string.IsNullOrEmpty(Project))
                 AnalyzeProject(Project, Framework);
             else
-                AnalyzePackage(Package, Version, Framework, _logger);
+                AnalyzePackage(Package, Version, Framework, _logger, PackageSourceEnvironment.MyGetCi); // TODO: move to param
+        }
+
+        enum PackageSourceEnvironment
+        {
+            /// <summary>
+            /// CI feed on MyGet
+            /// </summary>
+            MyGetCi = 0,
+            /// <summary>
+            /// Production feed on MyGet
+            /// </summary>
+            MyGet,
+            /// <summary>
+            /// Production feed on premise in BRF
+            /// </summary>
+            Brf
         }
 
         [SuppressMessage("ReSharper", "PossibleMultipleEnumeration")]
-        static void AnalyzePackage(string packageId, string version, string framework, ILogger logger)
+        static void AnalyzePackage(
+            string packageId,
+            string version,
+            string framework,
+            ILogger logger,
+            PackageSourceEnvironment packageSourceEnvironment)
         {
             var packageIdentity = new PackageIdentity(packageId, NuGetVersion.Parse(version));
-            var settings = Settings.LoadDefaultSettings(root: null, configFileName: null, machineWideSettings: null);
-            var sourceRepositoryProvider = new SourceRepositoryProvider(settings, Repository.Provider.GetCoreV3());
-            var nugetFramework = NuGetFramework.ParseFolder(framework);
-            var nugetLogger = logger.AsNuGetLogger();
 
-            using (var cacheContext = new SourceCacheContext())
+            // If configFileName is null, the user specific settings file is %AppData%\NuGet\NuGet.config.
+            // After that, the machine wide settings files are added (c:\programdata\NuGet\Config\*.config).
+            //var settings = Settings.LoadDefaultSettings(root: null, configFileName: null, machineWideSettings: null);
+            //var sourceRepositoryProvider = new SourceRepositoryProvider(settings, Repository.Provider.GetCoreV3());
+
+            // TODO: Configure packageSources from external config
+            // TODO: Use environment variables for MyGet username/password!!!!!!
+            // TODO: Make 3 different environments
+            //      1. MyGetCi
+            //      2. MyGet
+            //      3. Brf
+
+            string username = null, password = null;
+            if (packageSourceEnvironment == PackageSourceEnvironment.MyGetCi ||
+                packageSourceEnvironment == PackageSourceEnvironment.MyGet)
+            {
+                username = Environment.GetEnvironmentVariable("MYGET_USERNAME");
+                if (string.IsNullOrEmpty(username)) username = "maxfire";
+                password = Environment.GetEnvironmentVariable("MYGET_PASSWORD");
+                if (string.IsNullOrEmpty(password)) throw new InvalidOperationException("Missing MYGET_PASSWORD environment variable.");
+            }
+
+            PackageSourceProvider packageSourceProvider;
+            switch (packageSourceEnvironment)
+            {
+                case PackageSourceEnvironment.MyGetCi:
+                    packageSourceProvider = new PackageSourceProvider(NullSettings.Instance, new []
+                    {
+                        CreatePackageSource("https://api.nuget.org/v3/index.json", "NuGet.org v3"),
+                        CreatePackageSource("https://www.myget.org/F/maxfire-ci/api/v3/index.json", "MaxfireCi"),
+                        CreateAuthenticatedPackageSource("https://www.myget.org/F/brf-ci/api/v3/index.json", "BrfCiMyGet", username, password)
+                    });
+                    break;
+                case PackageSourceEnvironment.MyGet:
+                    packageSourceProvider = new PackageSourceProvider(NullSettings.Instance, new []
+                    {
+                        CreatePackageSource("https://api.nuget.org/v3/index.json", "NuGet.org v3"),
+                        CreateAuthenticatedPackageSource("https://www.myget.org/F/brf/api/v3/index.json", "BrfMyGet", username, password)
+                    });
+                    break;
+                case PackageSourceEnvironment.Brf:
+                    packageSourceProvider = new PackageSourceProvider(NullSettings.Instance, new []
+                    {
+                        CreatePackageSource("https://api.nuget.org/v3/index.json", "NuGet.org v3"),
+                        CreatePackageSource("http://pr-nuget/nuget", "Brf"),
+                    });
+                    break;
+                default:
+                    throw new InvalidOperationException();
+            }
+
+            var sourceRepositoryProvider = new SourceRepositoryProvider(packageSourceProvider, Repository.Provider.GetCoreV3());
+
+            var nugetFramework = NuGetFramework.ParseFolder(framework);
+
+            // TODO: feeds used logging...
+
+            Console.WriteLine($"Framework: {nugetFramework}");
+
+            //var nugetLogger = logger.AsNuGetLogger();
+            var nugetLogger = NullLogger.Instance;
+
+            var tmpDirToRestoreTo = Path.Combine(Path.GetTempPath(), "packages");
+
+            using (var cacheContext = new SourceCacheContext {NoCache = true})
             {
                 var repositories = sourceRepositoryProvider.GetRepositories();
                 var resolvedPackages = new ConcurrentDictionary<PackageIdentity, SourcePackageDependencyInfo>(PackageIdentityComparer.Default);
 
                 // Builds transitive closure
+                // TODO: is Wait okay?
                 ResolvePackageDependencies(packageIdentity, nugetFramework, cacheContext, nugetLogger, repositories, resolvedPackages).Wait();
 
                 var resolverContext = new PackageResolverContext(
                     DependencyBehavior.Lowest,
-                    new[] { packageId },
-                    Enumerable.Empty<string>(),
-                    Enumerable.Empty<PackageReference>(),
-                    Enumerable.Empty<PackageIdentity>(),
+                    targetIds: new[] { packageId },
                     availablePackages: new HashSet<SourcePackageDependencyInfo>(resolvedPackages.Values),
                     packageSources: sourceRepositoryProvider.GetRepositories().Select(s => s.PackageSource),
-                    log: nugetLogger);
+                    log: nugetLogger,
+                    requiredPackageIds: Enumerable.Empty<string>(),
+                    packagesConfig: Enumerable.Empty<PackageReference>(),
+                    preferredVersions: Enumerable.Empty<PackageIdentity>());
 
                 var resolver = new PackageResolver();
-                IEnumerable<SourcePackageDependencyInfo> prunedPackages = resolver.Resolve(resolverContext, CancellationToken.None)
-                    .Select(id => resolvedPackages[id]);
+                List<SourcePackageDependencyInfo> prunedPackages;
+                try
+                {
+                    prunedPackages = resolver.Resolve(resolverContext, CancellationToken.None)
+                        .Select(id => resolvedPackages[id]).ToList();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"ERROR: {ex.Message}");
+                    return;
+                }
 
-                // TODO: Lib folder items of root
+                // TODO: Lib folder assembly file items of root
                 var rootNode = new PackageReferenceNode(packageIdentity.Id, packageIdentity.Version.ToString(), null);
+
+                Console.WriteLine($"root: {rootNode}");
 
                 var packageNodes = new Dictionary<string, PackageReferenceNode>(StringComparer.OrdinalIgnoreCase);
 
                 //var builder = new DependencyGraph.Builder(rootNode);
 
-                // TODO: problem thta the graph is flattened!!!!!
+                // TODO: problem that the graph is flattened!!!!!
                 // TODO: Should we inspect the items (assemblies of each package). remember meta-packages contain other packages
                 // TODO: dependencies are important
 
+                Console.WriteLine("Closure of dependency package graph:");
 
                 // resolve contained assemblies of packages
-                foreach (var target in prunedPackages)
+                foreach (SourcePackageDependencyInfo target in prunedPackages)
                 {
                     //target.Id
                     //target.Version
                     //target.Dependencies
 
+                    // TODO: --no-cache, --packages $tmpDirToRestoreTo
                     var downloadResource = target.Source.GetResource<DownloadResource>();
                     var downloadResult = downloadResource.GetDownloadResourceResultAsync(
                         new PackageIdentity(target.Id, target.Version),
-                        new PackageDownloadContext(cacheContext),
-                        SettingsUtility.GetGlobalPackagesFolder(settings),
+                        new PackageDownloadContext(cacheContext, directDownloadDirectory: tmpDirToRestoreTo, directDownload: true),
+                        SettingsUtility.GetGlobalPackagesFolder(NullSettings.Instance),
                         nugetLogger,
                         CancellationToken.None).Result;
 
                     // items in lib folder of target (a package is a collection of assemblies)
-                    var libItems = downloadResult.PackageReader.GetLibItems();
+                    var packageReader = downloadResult.PackageReader;
+                    if (packageReader == null)
+                    {
+                        downloadResult.PackageStream.Seek(0, SeekOrigin.Begin);
+                        packageReader = new PackageArchiveReader(downloadResult.PackageStream);
+                    }
+
+                    var libItems = packageReader.GetLibItems();
+
                     var reducer = new FrameworkReducer();
                     // resolve the targetFramework of the items
-                    var nearest = reducer.GetNearest(nugetFramework, libItems.Select(x => x.TargetFramework));
+                    NuGetFramework nearest = reducer.GetNearest(nugetFramework, libItems.Select(x => x.TargetFramework));
 
-                    // Package
+                    Console.WriteLine($"Nearest: {nearest}");
+
+                    // assembly references is a sequence of assembly names (file name including the extension)
                     var assemblyReferences = libItems
-                        .Where(@group => @group.TargetFramework.Equals(nearest))
-                        .SelectMany(@group => @group.Items)
+                        .Where(group => group.TargetFramework.Equals(nearest))
+                        .SelectMany(group => group.Items)
                         .Where(itemRelativePath => Path.GetExtension(itemRelativePath).Equals(".dll", StringComparison.OrdinalIgnoreCase))
-                        .Select(itemRelativePath => Path.GetFileName(itemRelativePath));
+                        .Select(Path.GetFileName);
+                        //.Select(assemblyName => new AssemblyReferenceNode(assemblyName)); // we do not include assembly references in the graph
 
-                    // we ignore framework references in nuspec (only used by MS)
-                    //var frameworkItems = downloadResult.PackageReader.GetFrameworkItems();
+                    // TODO we ignore framework references in nuspec (only used by MS)
+                    //var frameworkItems = packageReader.GetFrameworkItems();
                     //nearest = reducer.GetNearest(nugetFramework, frameworkItems.Select(x => x.TargetFramework));
 
-                    // TODO: We ignore
-                    //assemblyReferences = assemblyReferences.Concat(frameworkItems
+                    //// TODO: Why not use Path.GetFileName here?
+                    //var frameworkAssemblyReferences = frameworkItems
                     //    .Where(@group => @group.TargetFramework.Equals(nearest))
                     //    .SelectMany(@group => @group.Items)
-                    //    .Select(x => new AssemblyReferenceNode(x)));
+                    //    .Select(Path.GetFileName); // Why
+                    //    //.Select(assemblyName => new AssemblyReferenceNode(assemblyName)); // we do not include assembly references in the graph
+
+                    //assemblyReferences = assemblyReferences.Concat(frameworkAssemblyReferences);
 
                     var packageReferenceNode = new PackageReferenceNode(target.Id, target.Version.ToString(), assemblyReferences);
+
+                    Console.WriteLine(packageReferenceNode);
 
                     //builder.WithNode(packageReferenceNode);
                     //builder.WithNodes(assemblyReferences);
@@ -245,11 +359,30 @@ namespace Deps.CLI
                 foreach (SourcePackageDependencyInfo target in prunedPackages)
                 {
                     // TODO: predecessor node in dependency package graph
-                    //PackageReferenceNode packageReferenceNode = packageNodes[target.Id];
+                    PackageReferenceNode sourceNode = packageNodes[target.Id];
+
+                    // traverse all dependencies of nuspec
+                    foreach (PackageDependency dependency in target.Dependencies)
+                    {
+                        //dependency.Id
+                        //dependency.VersionRange
+
+                        // resolved dependency of sourceNode
+                        PackageReferenceNode targetNode = packageNodes[dependency.Id];
+
+                        //targetNode.PackageId
+                        //targetNode.Type (package)
+                        //targetNode.Version
+
+                        // labeled edge
+                        //new Edge(sourceNode, targetNode, x.VersionRange.ToString())
+
+                        Console.WriteLine($"{sourceNode}---{dependency.VersionRange}---->{targetNode}");
+                    }
 
                     // TODO: directed edge with label of version range for each successor node (successor node carries resolved version)
                     //builder.WithEdges(target.Dependencies.Select(x =>
-                    //    new Edge(packageReferenceNode, packageNodes[x.Id], x.VersionRange.ToString())));
+                    //    new Edge(sourceNode, packageNodes[x.Id], x.VersionRange.ToString())));
                 }
 
                 //return builder.Build();
@@ -272,7 +405,7 @@ namespace Deps.CLI
             }
 
             // TODO
-            // Avoid getting info for e.g. netstandard1.x if our framework is highet (e.g. netstandard2.0)
+            // Avoid getting info for e.g. netstandard1.x if our framework is highest (e.g. netstandard2.0)
             //if (framework.IsPackageBased &&
             //    package.Id.Equals("netstandard.library", StringComparison.OrdinalIgnoreCase) &&
             //    NuGetFrameworkUtility.IsCompatibleWithFallbackCheck(framework,
@@ -305,6 +438,33 @@ namespace Deps.CLI
             }
         }
 
+        static PackageSource CreatePackageSource(string sourceUrl, string sourceName)
+        {
+            return new PackageSource(sourceUrl, sourceName)
+            {
+                ProtocolVersion = 3
+            };
+        }
+
+        static PackageSource CreateAuthenticatedPackageSource(string sourceUrl, string sourceName, string username, string password)
+        {
+            if (username == null) throw new ArgumentNullException(nameof(username));
+            if (password == null) throw new ArgumentNullException(nameof(password));
+
+            // credentials required to authenticate user within package source web requests.
+            var credentials = new PackageSourceCredential(sourceName, username, password,
+                isPasswordClearText: true,
+                validAuthenticationTypesText: null);
+
+            var packageSource = new PackageSource(sourceUrl, sourceName)
+            {
+                Credentials = credentials,
+                ProtocolVersion = 3
+            };
+
+            return packageSource;
+        }
+
         private static readonly string[] PACKAGE_PREFIXES_TO_IGNORE =
         {
             "System.",
@@ -321,6 +481,7 @@ namespace Deps.CLI
         // 4. Construct LockFile from assets file for the project
         static void AnalyzeProject(string projectPath, string framework)
         {
+            // TODO: use framework (csproj must have this targetFramework)
             var nugetFramework = NuGetFramework.ParseFolder(framework);
 
             // HACK
@@ -441,78 +602,5 @@ namespace Deps.CLI
             }
             return path;
         }
-    }
-
-
-    public abstract class Node : IEquatable<Node>
-    {
-        public string Id { get; }
-
-        public abstract string Type { get; }
-
-        protected Node(string id)
-        {
-            Id = id ?? throw new ArgumentNullException(nameof(id));
-        }
-
-        public virtual bool Equals(Node other)
-        {
-            if (other == null) return false;
-            if (ReferenceEquals(this, other)) return true;
-            return GetType() == other.GetType() && Id.Equals(other.Id, StringComparison.OrdinalIgnoreCase);
-        }
-
-        public override bool Equals(object obj)
-        {
-            return obj is Node node && Equals(node);
-        }
-
-        public override int GetHashCode()
-        {
-            return Id.GetHashCode();
-        }
-
-        public override string ToString()
-        {
-            return Id;
-        }
-    }
-
-    public sealed class PackageReferenceNode : Node
-    {
-        public string PackageId => Id;
-
-        public string Version { get; }
-
-        public IEnumerable<string> LibAssemblyFiles { get; }
-
-        public PackageReferenceNode(string packageId, string version, IEnumerable<string> libAssemblyFiles)
-            : base(packageId)
-        {
-            Version = version ?? throw new ArgumentNullException(nameof(version));
-            LibAssemblyFiles = (libAssemblyFiles ?? Enumerable.Empty<string>()).ToArray();
-        }
-
-        public override bool Equals(Node other)
-        {
-            return base.Equals(other) && (!(other is PackageReferenceNode packageReference) ||
-                                          Version.Equals(packageReference.Version, StringComparison.Ordinal));
-        }
-
-        public override string Type { get; } = "Package";
-
-        public override string ToString()
-        {
-            return $"{PackageId} {Version}";
-        }
-    }
-
-    public sealed class ProjectReferenceNode : Node
-    {
-        public ProjectReferenceNode(string projectPath) : base(Path.GetFileName(projectPath))
-        {
-        }
-
-        public override string Type { get; } = "Project";
     }
 }

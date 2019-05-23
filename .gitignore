@@ -3,6 +3,12 @@
 .dotnet/
 
 artifacts/
+tools/
+
+# debug settings contains MYGET_PASSWORD value in clear text
+launchSettings.json
+
+graph.txt
 
 # User-specific files
 *.suo
