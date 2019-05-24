@@ -41,21 +41,47 @@ namespace Deps.CLI
 
     public sealed class PackageReferenceNode : Node
     {
+        private readonly string[] _libAssemblyFiles;
+
         public string PackageId => Id;
 
         public string Version { get; }
 
-        public IEnumerable<string> LibAssemblyFiles { get; }
+        /// <summary>
+        /// The nearest matching framework that is compatible with the target
+        /// framework of the root Framework (i.e. the resolved framework under
+        /// the lib folder).
+        /// </summary>
+        public string Framework { get; }
 
-        public PackageReferenceNode(string packageId, string version, IEnumerable<string> libAssemblyFiles)
+        /// <summary>
+        /// The shortened version of the <see cref="Framework"/> using the default mappings.
+        /// Ex: net45
+        /// </summary>
+        public string FrameworkMoniker { get; }
+
+        /// <summary>
+        /// Any lib folder items (i.e. assembly file names) of the nupkg.
+        /// </summary>
+        public IEnumerable<string> LibAssemblyFiles => _libAssemblyFiles;
+
+        public PackageReferenceNode(
+            string packageId,
+            string version,
+            string framework,
+            string frameworkMoniker,
+            IEnumerable<string> libAssemblyFiles = null)
             : base(packageId)
         {
             Version = version ?? throw new ArgumentNullException(nameof(version));
-            LibAssemblyFiles = (libAssemblyFiles ?? Enumerable.Empty<string>()).ToArray();
+            Framework = framework ?? throw new ArgumentNullException(nameof(framework));
+            FrameworkMoniker = frameworkMoniker ?? throw new ArgumentNullException(nameof(frameworkMoniker));
+            _libAssemblyFiles = (libAssemblyFiles ?? Enumerable.Empty<string>()).ToArray();
         }
 
         public override bool Equals(Node other)
         {
+            // NOTE: Framework/FrameworkMoniker should not be part of identity condition
             return base.Equals(other) && (!(other is PackageReferenceNode packageReference) ||
                                           Version.Equals(packageReference.Version, StringComparison.Ordinal));
         }
@@ -64,7 +90,7 @@ namespace Deps.CLI
 
         public override string ToString()
         {
-            return $"{PackageId} {Version}";
+            return $"{PackageId} {Version} ({FrameworkMoniker}, Count={_libAssemblyFiles.Length})";
         }
     }
 

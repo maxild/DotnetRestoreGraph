@@ -61,8 +61,14 @@ namespace Deps.CLI
         [Option("--package <PACKAGE>", Description = "Analyzes a specific (nupkg) package.")]
         public string Package { get; }
 
-        [Option("--version <PACKAGEVERSION>", Description = "The version of the package to analyze.")]
+        [Option("--version <PACKAGE_VERSION>", Description = "The version of the package to analyze.")]
         public string Version { get; }
+
+        [Option("--source <PACKAGE_SOURCE_ENV>", Description =
+            "The different package source configurations. Allowed values are NugetOrg, MyGetCi, MyGet and Brf.")]
+        public PackageSourceEnvironment PackageSourceEnvironment { get; } = PackageSourceEnvironment.NugetOrg;
+
+        // TODO: Option for the tmp directory to restore packages to (--packagesDir <PACKAGES_DIR>).
 
         [SuppressMessage("ReSharper", "UnusedMember.Local")]
         private ValidationResult OnValidate()
@@ -133,23 +139,7 @@ namespace Deps.CLI
             if (!string.IsNullOrEmpty(Project))
                 AnalyzeProject(Project, Framework);
             else
-                AnalyzePackage(Package, Version, Framework, _logger, PackageSourceEnvironment.MyGetCi); // TODO: move to param
-        }
-
-        enum PackageSourceEnvironment
-        {
-            /// <summary>
-            /// CI feed on MyGet
-            /// </summary>
-            MyGetCi = 0,
-            /// <summary>
-            /// Production feed on MyGet
-            /// </summary>
-            MyGet,
-            /// <summary>
-            /// Production feed on premise in BRF
-            /// </summary>
-            Brf
+                AnalyzePackage(Package, Version, Framework, _logger, PackageSourceEnvironment.Brf); // TODO: move to param
         }
 
         [SuppressMessage("ReSharper", "PossibleMultipleEnumeration")]
@@ -160,7 +150,8 @@ namespace Deps.CLI
             ILogger logger,
             PackageSourceEnvironment packageSourceEnvironment)
         {
-            var packageIdentity = new PackageIdentity(packageId, NuGetVersion.Parse(version));
+            var rootPackageIdentity = new PackageIdentity(packageId, NuGetVersion.Parse(version));
+            var rootNuGetFramework = NuGetFramework.ParseFolder(framework);
 
             // If configFileName is null, the user specific settings file is %AppData%\NuGet\NuGet.config.
             // After that, the machine wide settings files are added (c:\programdata\NuGet\Config\*.config).
@@ -206,20 +197,26 @@ namespace Deps.CLI
                     packageSourceProvider = new PackageSourceProvider(NullSettings.Instance, new []
                     {
                         CreatePackageSource("https://api.nuget.org/v3/index.json", "NuGet.org v3"),
-                        CreatePackageSource("http://pr-nuget/nuget", "Brf"),
+                        CreatePackageSource("http://pr-nuget/nuget", "Brf", protocolVersion: 2)
                     });
                     break;
+                case PackageSourceEnvironment.NugetOrg:
                 default:
-                    throw new InvalidOperationException();
+                    packageSourceProvider = new PackageSourceProvider(NullSettings.Instance, new []
+                    {
+                        CreatePackageSource("https://api.nuget.org/v3/index.json", "NuGet.org v3")
+                    });
+                    break;
             }
 
             var sourceRepositoryProvider = new SourceRepositoryProvider(packageSourceProvider, Repository.Provider.GetCoreV3());
 
-            var nugetFramework = NuGetFramework.ParseFolder(framework);
-
-            // TODO: feeds used logging...
-
-            Console.WriteLine($"Framework: {nugetFramework}");
+            Console.WriteLine("Feeds used:");
+            foreach (var packageSource in packageSourceProvider.LoadPackageSources())
+            {
+                Console.WriteLine($"    {packageSource}");
+            }
+            Console.WriteLine();
 
             //var nugetLogger = logger.AsNuGetLogger();
             var nugetLogger = NullLogger.Instance;
@@ -233,7 +230,7 @@ namespace Deps.CLI
 
                 // Builds transitive closure
                 // TODO: is Wait okay?
-                ResolvePackageDependencies(packageIdentity, nugetFramework, cacheContext, nugetLogger, repositories, resolvedPackages).Wait();
+                ResolvePackageDependencies(rootPackageIdentity, rootNuGetFramework, cacheContext, nugetLogger, repositories, resolvedPackages).Wait();
 
                 var resolverContext = new PackageResolverContext(
                     DependencyBehavior.Lowest,
@@ -247,21 +244,20 @@ namespace Deps.CLI
 
                 var resolver = new PackageResolver();
                 List<SourcePackageDependencyInfo> prunedPackages;
-                try
-                {
+                //try
+                //{
                     prunedPackages = resolver.Resolve(resolverContext, CancellationToken.None)
                         .Select(id => resolvedPackages[id]).ToList();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"ERROR: {ex.Message}");
-                    return;
-                }
+                //}
+                //catch (Exception ex)
+                //{
+                //    Console.WriteLine($"ERROR: {ex.Message}");
+                //    return;
+                //}
 
-                // TODO: Lib folder assembly file items of root
-                var rootNode = new PackageReferenceNode(packageIdentity.Id, packageIdentity.Version.ToString(), null);
-
-                Console.WriteLine($"root: {rootNode}");
+                Console.WriteLine($"root package identity: {rootPackageIdentity}");
+                Console.WriteLine($"root target framework: {rootNuGetFramework.DotNetFrameworkName} ({rootNuGetFramework.GetShortFolderName()})");
+                Console.WriteLine();
 
                 var packageNodes = new Dictionary<string, PackageReferenceNode>(StringComparer.OrdinalIgnoreCase);
 
@@ -271,7 +267,10 @@ namespace Deps.CLI
                 // TODO: Should we inspect the items (assemblies of each package). remember meta-packages contain other packages
                 // TODO: dependencies are important
 
-                Console.WriteLine("Closure of dependency package graph:");
+                Console.WriteLine("Vertices of dependency package graph:");
+                Console.WriteLine();
+
+                PackageReferenceNode rootPackage = null;
 
                 // resolve contained assemblies of packages
                 foreach (SourcePackageDependencyInfo target in prunedPackages)
@@ -282,6 +281,8 @@ namespace Deps.CLI
 
                     // TODO: --no-cache, --packages $tmpDirToRestoreTo
                     var downloadResource = target.Source.GetResource<DownloadResource>();
+
+                    // TODO: .Result of Async
                     var downloadResult = downloadResource.GetDownloadResourceResultAsync(
                         new PackageIdentity(target.Id, target.Version),
                         new PackageDownloadContext(cacheContext, directDownloadDirectory: tmpDirToRestoreTo, directDownload: true),
@@ -301,9 +302,7 @@ namespace Deps.CLI
 
                     var reducer = new FrameworkReducer();
                     // resolve the targetFramework of the items
-                    NuGetFramework nearest = reducer.GetNearest(nugetFramework, libItems.Select(x => x.TargetFramework));
-
-                    Console.WriteLine($"Nearest: {nearest}");
+                    NuGetFramework nearest = reducer.GetNearest(rootNuGetFramework, libItems.Select(x => x.TargetFramework));
 
                     // assembly references is a sequence of assembly names (file name including the extension)
                     var assemblyReferences = libItems
@@ -326,9 +325,16 @@ namespace Deps.CLI
 
                     //assemblyReferences = assemblyReferences.Concat(frameworkAssemblyReferences);
 
-                    var packageReferenceNode = new PackageReferenceNode(target.Id, target.Version.ToString(), assemblyReferences);
+                    var packageReferenceNode = new PackageReferenceNode(target.Id, target.Version.ToString(),
+                        nearest.DotNetFrameworkName, nearest.GetShortFolderName(), assemblyReferences);
 
-                    Console.WriteLine(packageReferenceNode);
+                    if (rootPackageIdentity.Equals(new PackageIdentity(target.Id, target.Version)))
+                    {
+                        if (rootPackage != null) throw new InvalidOperationException("UNEXPECTED: Root package should be unique.");
+                        rootPackage = packageReferenceNode;
+                    }
+
+                    Console.WriteLine($"    {packageReferenceNode}");
 
                     //builder.WithNode(packageReferenceNode);
                     //builder.WithNodes(assemblyReferences);
@@ -339,6 +345,7 @@ namespace Deps.CLI
                     // TODO: Pack2Pack reference (directed vertex)
                     packageNodes.Add(target.Id, packageReferenceNode);
                 }
+                Console.WriteLine();
 
                 // NOTE: We have transitive closure so all references are resolved!!!!
                 // NOTE: The relation is A 'depends on' B shown like A ---> B
@@ -354,6 +361,9 @@ namespace Deps.CLI
                 //       on the way up (that eventually merge). This is like GIT history (DAG)
                 // Another way to see it is Tree is like single class inheritance, and DAG is like multiple class inheritance.
                 // A (successor, downstream, core) package can be depended on by many (predecessor, upstream) packages
+
+                Console.WriteLine("Edges of dependency package graph:");
+                Console.WriteLine();
 
                 // resolve dependencies of packages
                 foreach (SourcePackageDependencyInfo target in prunedPackages)
@@ -377,13 +387,17 @@ namespace Deps.CLI
                         // labeled edge
                         //new Edge(sourceNode, targetNode, x.VersionRange.ToString())
 
-                        Console.WriteLine($"{sourceNode}---{dependency.VersionRange}---->{targetNode}");
+                        Console.WriteLine($"    {sourceNode}---{dependency.VersionRange}---->{targetNode}");
                     }
 
                     // TODO: directed edge with label of version range for each successor node (successor node carries resolved version)
                     //builder.WithEdges(target.Dependencies.Select(x =>
                     //    new Edge(sourceNode, packageNodes[x.Id], x.VersionRange.ToString())));
                 }
+
+                Console.WriteLine();
+                Console.WriteLine($"root package: {rootPackage}");
+
 
                 //return builder.Build();
             }
@@ -438,11 +452,11 @@ namespace Deps.CLI
             }
         }
 
-        static PackageSource CreatePackageSource(string sourceUrl, string sourceName)
+        static PackageSource CreatePackageSource(string sourceUrl, string sourceName, int protocolVersion = 3)
         {
             return new PackageSource(sourceUrl, sourceName)
             {
-                ProtocolVersion = 3
+                ProtocolVersion = protocolVersion
             };
         }
 
@@ -482,7 +496,7 @@ namespace Deps.CLI
         static void AnalyzeProject(string projectPath, string framework)
         {
             // TODO: use framework (csproj must have this targetFramework)
-            var nugetFramework = NuGetFramework.ParseFolder(framework);
+            var rootNuGetFramework = NuGetFramework.ParseFolder(framework);
 
             // HACK
             if (string.IsNullOrEmpty(projectPath))
