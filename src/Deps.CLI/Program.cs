@@ -52,6 +52,7 @@ namespace Deps.CLI
             "Sets the verbosity level of the command. Allowed values are Trace, Debug, Information, Warning, Error, Critical, None")]
         public LogLevel Verbosity { get; } = LogLevel.Information;
 
+        // TODO: Maybe --project option instead
         [Argument(0, Description = "The (csproj) project file to analyze.")]
         public string Project { get; set; }
 
@@ -75,16 +76,10 @@ namespace Deps.CLI
         {
             if (!string.IsNullOrEmpty(Project))
             {
-                // Do we have an explicit/full csproj path
+                // AnalyzeProject
                 if (File.Exists(Project))
                 {
-                    // Correct relative paths so they work when passed to Uri
-                    var fullPath = Path.GetFullPath(Project);
-                    if (fullPath != Project && File.Exists(fullPath))
-                    {
-                        Project = fullPath;
-                    }
-
+                    Project = Path.GetFullPath(Project);
                     return ValidationResult.Success;
                 }
 
@@ -110,11 +105,11 @@ namespace Deps.CLI
                     return new ValidationResult("More than one project file found in working directory.");
                 }
 
-                Project = csproj[0];
+                Project = Path.GetFullPath(csproj[0]);
             }
             else
             {
-                // Validate PackageIdentity
+                // AnalyzePackage
                 if (string.IsNullOrEmpty(Package))
                 {
                     return new ValidationResult("Either --project or --package must be specified.");
@@ -496,7 +491,7 @@ namespace Deps.CLI
         static void AnalyzeProject(string projectPath, string framework)
         {
             // TODO: use framework (csproj must have this targetFramework)
-            var rootNuGetFramework = NuGetFramework.ParseFolder(framework);
+            var rootNuGetFramework = NuGetFramework.ParseFolder(framework); // TODO: optional filter
 
             // HACK
             if (string.IsNullOrEmpty(projectPath))
@@ -518,6 +513,10 @@ namespace Deps.CLI
             // For each top-level (kernel item) package reference
             // ProjectStyle.PackageReference: MSBuild style <PackageReference>, where project.assets.json (lock file) is
             // generated in the RestoreOutputPath folder
+
+            // TODO: What about ProjectReferences...are project references converted to package specs in dgspec file???
+
+            // for each csproj with PackageReference style (i.e. SDK csproj)
             foreach (PackageSpec project in dependencyGraph.Projects.Where(p => p.RestoreMetadata.ProjectStyle == ProjectStyle.PackageReference))
             {
                 // TODO: Maybe just use the project.assets.json created by .NET Core SDK tooling
@@ -529,7 +528,20 @@ namespace Deps.CLI
                 //var libraries = lockFile.Targets.Single(x => x.TargetFramework.Framework == framework)
                 //    .Libraries.Where(x => x.Type.Equals("package", StringComparison.OrdinalIgnoreCase)).ToList();
 
+                // root project
                 Console.WriteLine(project.Name);
+                //project.Dependencies // nuspec dependencies
+                //project.RestoreMetadata.ProjectName
+                //project.TargetFrameworks
+                //project.Version
+
+                var rootProject = new ProjectReferenceNode(Path.GetFileName(project.FilePath));
+
+                Console.WriteLine($"rootProject: {rootProject}");
+                Console.WriteLine($"root ProjectName: {project.RestoreMetadata.ProjectName}");
+                Console.WriteLine($"root Version: {project.Version}");
+                Console.WriteLine($"root TargetFrameworks: {string.Join(", ", project.TargetFrameworks.Select(tfm => tfm.FrameworkName.GetShortFolderName()))}");
+                Console.WriteLine($"root Sources: {string.Join(", ", project.RestoreMetadata.Sources)}");
 
                 // TODO: How to resolve 'TargetFramework' from project of dgspec (resolved restore graph)
                 //TargetFrameworkInformation targetFramework2 = project.TargetFrameworks.Single(t => t.FrameworkName.Equals(nugetFramework));
@@ -538,8 +550,13 @@ namespace Deps.CLI
                 //LockFileTarget lockFileTargetFramework2 =
                 //    lockFile.Targets.FirstOrDefault(t => t.TargetFramework.Equals(nugetFramework));
 
+                bool foundTargetFramework = false;
                 foreach (TargetFrameworkInformation targetFramework in project.TargetFrameworks)
                 {
+                    if (!rootNuGetFramework.Equals(targetFramework.FrameworkName)) continue;
+
+                    foundTargetFramework = true;
+
                     Console.WriteLine($"  [{targetFramework.FrameworkName}]");
 
                     // Find the transitive closure for this tfm
@@ -559,7 +576,12 @@ namespace Deps.CLI
                             ReportLockFilePackageDependencies(resolvedPackageReference, lockFileTargetFramework, 1);
                         }
                     }
+                }
 
+                if (!foundTargetFramework)
+                {
+                    // TODO: Error or exception!!!!
+                    Console.WriteLine($"ERROR: Could not find TargetFramework {rootNuGetFramework.GetShortFolderName()} in {projectPath}");
                 }
             }
         }
@@ -574,6 +596,9 @@ namespace Deps.CLI
             {
                 return;
             }
+
+            //projectLibrary.Name
+            //projectLibrary.Framework
 
             // indent shows levels of the graph
             Console.Write(new string(' ', indentLevel * INDENT_SIZE));
@@ -592,6 +617,7 @@ namespace Deps.CLI
 
                 // name and version of package dependency
                 var packageId = dependencyReference.Id;
+                //dependencyReference.VersionRange
 
                 // Find the dependency (reference) among the libraries (the transitive closure of that tfm)
                 LockFileTargetLibrary dependencyLibrary =
@@ -599,6 +625,7 @@ namespace Deps.CLI
 
                 // dependencyLibrary has (Name, Framework, Version, Type, Dependencies, ...) attributes
 
+                // recursive call
                 ReportLockFilePackageDependencies(dependencyLibrary, lockFileTargetFramework, indentLevel + 1);
             }
         }
