@@ -4,7 +4,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using NuGet.ProjectModel;
 
-namespace Deps.CLI
+namespace Deps.Core
 {
     /// <summary>
     /// TODO

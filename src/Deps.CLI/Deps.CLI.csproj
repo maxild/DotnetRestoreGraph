@@ -25,10 +25,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="McMaster.Extensions.CommandLineUtils" Version="2.3.4" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="2.2.0" />
-    <PackageReference Include="NuGet.ProjectModel" Version="5.1.0" />
-    <PackageReference Include="NuGet.Resolver" Version="5.1.0" />
+    <PackageReference Include="McMaster.Extensions.CommandLineUtils" Version="$(McMasterExtensionsCommandLineUtilsVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="$(MicrosoftExtensionsLoggingConsoleVersion)" />
+    <PackageReference Include="NuGet.ProjectModel" Version="$(NuGetProjectModelVersion)" />
+    <PackageReference Include="NuGet.Resolver" Version="$(NuGetProjectModelVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Deps.Core\Deps.Core.csproj" />
   </ItemGroup>
 
 

@@ -1,7 +1,7 @@
 using System.IO;
 using NuGet.ProjectModel;
 
-namespace Deps.CLI
+namespace Deps.Core
 {
     // Which versions of NuGet support restore with lock file
     //      * NuGet.exe version 4.9 and above.

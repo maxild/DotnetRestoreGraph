@@ -8,6 +8,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using Deps.Core;
 using McMaster.Extensions.CommandLineUtils;
 using Microsoft.Extensions.Logging;
 using NuGet.Common;

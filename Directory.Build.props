@@ -1,0 +1,41 @@
+<Project>
+
+    <Import Project="build\dependencies.props" />
+
+    <!-- Compiler properties -->
+    <PropertyGroup>
+        <LangVersion>7.3</LangVersion>
+        <NoWarn>$(NoWarn);CS1591</NoWarn>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    </PropertyGroup>
+
+    <!-- AssemblyInfo properties -->
+    <PropertyGroup>
+        <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="JetBrains.Annotations" Version="$(JetBrainsAnnotationsPackageVersion)">
+            <PrivateAssets>all</PrivateAssets>
+        </PackageReference>
+    </ItemGroup>
+
+    <!-- Define .NET Core constants -->
+    <PropertyGroup Condition=" '$(TargetFramework)' == 'netstandard2.0' ">
+        <DefineConstants>$(DefineConstants);NETCORE</DefineConstants>
+        <DebugType>portable</DebugType>
+    </PropertyGroup>
+    <PropertyGroup Condition=" '$(TargetFramework)' == 'netcoreapp2.0' ">
+        <DefineConstants>$(DefineConstants);NETCORE</DefineConstants>
+        <DebugType>portable</DebugType>
+    </PropertyGroup>
+    <PropertyGroup Condition=" '$(TargetFramework)' == 'netcoreapp2.1' ">
+        <DefineConstants>$(DefineConstants);NETCORE</DefineConstants>
+        <DebugType>portable</DebugType>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <NetStandardImplicitPackageVersion Condition=" '$(TargetFramework)' == 'netcoreapp2.0' ">2.0.0</NetStandardImplicitPackageVersion>
+    </PropertyGroup>
+
+</Project>

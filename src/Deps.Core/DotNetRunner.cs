@@ -3,7 +3,7 @@ using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Deps.CLI
+namespace Deps.Core
 {
     /// <remarks>
     /// Credit for the stuff happening in here goes to the https://github.com/jaredcnance/dotnet-status project
