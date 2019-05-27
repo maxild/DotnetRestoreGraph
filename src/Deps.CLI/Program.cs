@@ -678,10 +678,14 @@ namespace Deps.CLI
             }
         }
 
-        // TODO: Find the packages to download
         // recursive!!!
         static void ReportLockFilePackageDependencies(LockFileTargetLibrary projectLibrary, LockFileTarget lockFileTargetFramework, int indentLevel)
         {
+            if (!projectLibrary.Type.Equals("package", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"UNEXPECTED type {projectLibrary.Type} of {projectLibrary.Name}, v{projectLibrary.Version}");
+            }
+
             const int INDENT_SIZE = 2;
 
             // TODO: make option --full-graph
@@ -733,11 +737,6 @@ namespace Deps.CLI
             // indent shows levels of the graph
             Console.Write(new string(' ', indentLevel * INDENT_SIZE));
             Console.WriteLine($"{projectLibrary.Name}, v{projectLibrary.Version}, ({tfm})");
-
-            if (!projectLibrary.Type.Equals("package", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException($"UNEXPECTED: {projectLibrary.Type}, {projectLibrary.Name}, v{projectLibrary.Version}");
-            }
 
             foreach (PackageDependency dependencyReference in projectLibrary.Dependencies)
             {
