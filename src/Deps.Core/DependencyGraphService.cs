@@ -14,6 +14,23 @@ namespace Deps.Core
     /// </remarks>
     public class DependencyGraphService
     {
+        // /p:RestoreConfigFile=<path>
+        // See also https://github.com/NuGet/NuGet.Client/blob/68245312b050c5b992120448353eba3e20cdc414/src/NuGet.Core/NuGet.Build.Tasks/NuGet.targets#L100-L106
+        // RestoreNoCache, RestorePackagesPath, RestoreSources
+        // See also https://docs.microsoft.com/en-us/nuget/reference/msbuild-targets#restore-target
+
+        // TODO: This is old (obsolete)
+        // Inside the NuGet.targets file there's a section like this:
+        //     <ItemGroup Condition=" '$(PackageSources)' == '' ">
+        //         <!-- Package sources used to restore packages. By default, registered sources under %APPDATA%\NuGet\NuGet.Config will be used -->
+        //         <!-- The official NuGet package source (https://nuget.org/api/v2/) will be excluded
+        //              if package sources are specified and it does not appear in the list -->
+        //         <!--
+        //         <PackageSource Include="https://nuget.org/api/v2/" />
+        //         <PackageSource Include="https://my-nuget-source/nuget/" />
+        //         -->
+        //     </ItemGroup>
+
         public DependencyGraphSpec GenerateDependencyGraph(string projectPath)
         {
             var dotNetRunner = new DotNetRunner();

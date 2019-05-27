@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
@@ -491,10 +492,9 @@ namespace Deps.CLI
         // 4. Construct LockFile from assets file for the project
         static void AnalyzeProject(string projectPath, string framework)
         {
-            // TODO: use framework (csproj must have this targetFramework)
             var rootNuGetFramework = NuGetFramework.ParseFolder(framework); // TODO: optional filter
 
-            // HACK
+            // TODO: HACK...kan fjernes
             if (string.IsNullOrEmpty(projectPath))
             {
                 var rootPath = GetRepoRootPath();
@@ -507,18 +507,91 @@ namespace Deps.CLI
 
             // 'package graph' is a better word
             // Load dependency graph via nuget client tools build into msbuild (.NET Core CLI, .NET Core SDK)
+            // TODO: opsatning af packageSources
             var dependencyGraphService = new DependencyGraphService();
             var dependencyGraph = dependencyGraphService.GenerateDependencyGraph(projectPath);
 
-            // PackageReference based SDK projects
-            // For each top-level (kernel item) package reference
-            // ProjectStyle.PackageReference: MSBuild style <PackageReference>, where project.assets.json (lock file) is
+            // We only support MSBuild style <PackageReference> SDK projects, where project.assets.json (lock file) is
             // generated in the RestoreOutputPath folder
+            if (dependencyGraph.Projects.Any(p => p.RestoreMetadata.ProjectStyle != ProjectStyle.PackageReference))
+                throw new InvalidOperationException("Only SDK projects are supported.");
 
-            // TODO: What about ProjectReferences...are project references converted to package specs in dgspec file???
+            var projectRoot = dependencyGraph.Projects.Single(p => Path.GetFileName(p.FilePath) == Path.GetFileName(projectPath));
+
+            var projectRootTargetFramework = projectRoot.TargetFrameworks.FirstOrDefault(tf => rootNuGetFramework.Equals(tf.FrameworkName));
+
+            if (projectRootTargetFramework == null)
+            {
+                throw new InvalidOperationException(
+                    $"The root project does not define the TargetFramework {rootNuGetFramework}");
+            }
+
+            //Console.WriteLine($"project: {Path.GetFileName(project.FilePath)}");
+            //Console.WriteLine($"project.BaseDirectory: {Path.GetFileName(project.BaseDirectory)}");
+            //Console.WriteLine($"project.Name: {project.Name}");
+            //Console.WriteLine($"project.TargetFrameworks: {string.Join(", ", project.TargetFrameworks.Select(tfm => tfm.FrameworkName.GetShortFolderName()))}");
+            //Console.WriteLine($"project.Version: {project.Version}");
+            //Console.WriteLine($"project.RestoreMetadata.ProjectName: {project.RestoreMetadata.ProjectName}");
+            //Console.WriteLine($"project.RestoreMetadata.Sources: {string.Join(", ", project.RestoreMetadata.Sources)}");
+            //Console.WriteLine($"project.Dependencies: {string.Join(", ", project.Dependencies)}");
+
+
+            // TODO: Path. Unique name etc...
+            Console.WriteLine($"Name: {projectRoot.Name}");
+            Console.WriteLine($"Version: {projectRoot.Version} ({rootNuGetFramework.GetShortFolderName()})");
+            Console.WriteLine($"Framework: {rootNuGetFramework.DotNetFrameworkName}");
+            Console.WriteLine($"Framework moniker: {rootNuGetFramework.GetShortFolderName()}");
+            Console.WriteLine();
+
+            Console.WriteLine("resolve project reference dependency graph");
+            Console.WriteLine();
+
+            // TODO: Path. Unique name etc...
+            Console.WriteLine($"{projectRoot.Name}, v{projectRoot.Version} ({rootNuGetFramework.GetShortFolderName()})");
+
+            //
+            // First resolve project reference dependency graph
+            //
+
+            foreach (ProjectRestoreMetadataFrameworkInfo targetFramework in projectRoot.RestoreMetadata.TargetFrameworks)
+            {
+                // only want project references defined for the TargetFramework
+                if (!rootNuGetFramework.Equals(targetFramework.FrameworkName)) continue;
+
+                // project references of a targetFramework
+                foreach (var projectRestoreReference in targetFramework.ProjectReferences)
+                {
+                    // TODO: PrivateAssets, ExcludeAssets, IncludeAssets
+                    //dependency.ProjectPath
+                    //dependency.ProjectUniqueName
+                    PackageSpec project = dependencyGraph.GetProjectSpec(projectRestoreReference.ProjectUniqueName);
+
+                    //Console.WriteLine($"({project.Name}, {Path.GetFileName(project.FilePath)}) is a project reference of ({projectRoot.Name}, {Path.GetFileName(projectRoot.FilePath)}");
+
+                    ReportProjectReferences(project, rootNuGetFramework, dependencyGraph, 1);
+                }
+            }
+
+            // TODO: What about ProjectReferences...are project references converted to package specs in dgspec file??? YES,
+            // and available via dependencyGraph.Projects and dependencyGraph.GetProjectSpec
+
+            // TODO: project Closure is part of graph all ready
+            // closure[0] is the root
+            // closure[1..m] contains project references
+            IReadOnlyList<PackageSpec> projectClosure = dependencyGraph.GetClosure(projectRoot.RestoreMetadata.ProjectUniqueName);
+
+            Debug.Assert(ReferenceEquals(projectRoot, projectClosure[0]));
+
+            //
+            // Second, resolve package reference dependency graph of each project
+            //
+
+            Console.WriteLine();
+            Console.WriteLine("resolve package reference dependency graph");
+            Console.WriteLine();
 
             // for each csproj with PackageReference style (i.e. SDK csproj)
-            foreach (PackageSpec project in dependencyGraph.Projects.Where(p => p.RestoreMetadata.ProjectStyle == ProjectStyle.PackageReference))
+            foreach (PackageSpec project in dependencyGraph.Projects)
             {
                 // TODO: Maybe just use the project.assets.json created by .NET Core SDK tooling
                 // Generate lock file: A lock file has the package dependency graph for the project/solution/repo
@@ -526,64 +599,82 @@ namespace Deps.CLI
                 var lockFileService = new LockFileService();
                 LockFile lockFile = lockFileService.GetLockFile(project.FilePath, project.RestoreMetadata.OutputPath);
 
-                //var libraries = lockFile.Targets.Single(x => x.TargetFramework.Framework == framework)
-                //    .Libraries.Where(x => x.Type.Equals("package", StringComparison.OrdinalIgnoreCase)).ToList();
+                // TODO: This could change our code...we can get at the project references inside one single loop
+                //{
+                //    // TODO: For debugging
+                //    var projectDirectory = Path.GetDirectoryName(lockFile.PackageSpec.RestoreMetadata.ProjectPath);
+                //    // full path to the referenced msbuild files (csproj files)
+                //    var projectReferences = lockFile.Libraries
+                //        .Where(library => library.MSBuildProject != null)
+                //        .Select(library => Path.GetFullPath(Path.Combine(projectDirectory, library.MSBuildProject)))
+                //        .ToArray();
 
-                // root project
-                Console.WriteLine(project.Name);
-                //project.Dependencies // nuspec dependencies
-                //project.RestoreMetadata.ProjectName
-                //project.TargetFrameworks
-                //project.Version
+                //    if (projectReferences.Length > 0)
+                //    {
+                //        Console.WriteLine($"project references {string.Join(", ", projectReferences)}");
+                //    }
+                //}
 
-                var rootProject = new ProjectReferenceNode(Path.GetFileName(project.FilePath));
+                var reducer = new FrameworkReducer();
+                NuGetFramework nearest = reducer.GetNearest(rootNuGetFramework, project.TargetFrameworks.Select(x => x.FrameworkName));
 
-                Console.WriteLine($"rootProject: {rootProject}");
-                Console.WriteLine($"root ProjectName: {project.RestoreMetadata.ProjectName}");
-                Console.WriteLine($"root Version: {project.Version}");
-                Console.WriteLine($"root TargetFrameworks: {string.Join(", ", project.TargetFrameworks.Select(tfm => tfm.FrameworkName.GetShortFolderName()))}");
-                Console.WriteLine($"root Sources: {string.Join(", ", project.RestoreMetadata.Sources)}");
+                TargetFrameworkInformation resolvedTargetFramework =
+                    project.TargetFrameworks.Single(tf => nearest.Equals(tf.FrameworkName));
 
-                // TODO: How to resolve 'TargetFramework' from project of dgspec (resolved restore graph)
-                //TargetFrameworkInformation targetFramework2 = project.TargetFrameworks.Single(t => t.FrameworkName.Equals(nugetFramework));
+                // for the root should this resolve to the rootNuGetFramework
+                Console.WriteLine($"{project.Name}, v{project.Version}, ({resolvedTargetFramework.FrameworkName.GetShortFolderName()})");
 
-                // TODO: How to resolve 'TargetFramework' from lockfile (resolved package graph)
-                //LockFileTarget lockFileTargetFramework2 =
-                //    lockFile.Targets.FirstOrDefault(t => t.TargetFramework.Equals(nugetFramework));
+                // Find the transitive closure for this tfm
+                LockFileTarget lockFileTargetFramework =
+                    lockFile.Targets.FirstOrDefault(t => t.TargetFramework.Equals(resolvedTargetFramework.FrameworkName));
 
-                bool foundTargetFramework = false;
-                foreach (TargetFrameworkInformation targetFramework in project.TargetFrameworks)
+                if (lockFileTargetFramework != null)
                 {
-                    if (!rootNuGetFramework.Equals(targetFramework.FrameworkName)) continue;
-
-                    foundTargetFramework = true;
-
-                    Console.WriteLine($"  [{targetFramework.FrameworkName}]");
-
-                    // Find the transitive closure for this tfm
-                    LockFileTarget lockFileTargetFramework =
-                        lockFile.Targets.FirstOrDefault(t => t.TargetFramework.Equals(targetFramework.FrameworkName));
-
-                    if (lockFileTargetFramework != null)
+                    // For each direct dependency
+                    foreach (LibraryDependency directDependency in resolvedTargetFramework.Dependencies)
                     {
-                        // For each transitive (closure item) dependency
-                        foreach (LibraryDependency dependency in targetFramework.Dependencies)
-                        {
-                            // Find the _resolved_ package reference
-                            LockFileTargetLibrary resolvedPackageReference =
-                                lockFileTargetFramework.Libraries.FirstOrDefault(library =>
-                                    library.Name == dependency.Name);
+                        // Find the _resolved_ package reference
+                        LockFileTargetLibrary resolvedPackageReference =
+                            lockFileTargetFramework.Libraries.FirstOrDefault(library =>
+                                library.Name == directDependency.Name);
 
-                            ReportLockFilePackageDependencies(resolvedPackageReference, lockFileTargetFramework, 1);
-                        }
+                        // Show transitive dependencies of this direct dependency
+                        ReportLockFilePackageDependencies(resolvedPackageReference, lockFileTargetFramework, 1);
                     }
                 }
 
-                if (!foundTargetFramework)
-                {
-                    // TODO: Error or exception!!!!
-                    Console.WriteLine($"ERROR: Could not find TargetFramework {rootNuGetFramework.GetShortFolderName()} in {projectPath}");
-                }
+            }
+        }
+
+        // recursive
+        static void ReportProjectReferences(PackageSpec project, NuGetFramework rootNuGetFramework,
+            DependencyGraphSpec dependencyGraph, int indentLevel)
+        {
+            const int INDENT_SIZE = 2;
+
+            var reducer = new FrameworkReducer();
+            // resolve the targetFramework of the project references
+            NuGetFramework nearest = reducer.GetNearest(rootNuGetFramework, project.RestoreMetadata.TargetFrameworks.Select(x => x.FrameworkName));
+
+            // indent shows levels of the graph
+            Console.Write(new string(' ', indentLevel * INDENT_SIZE));
+            Console.WriteLine($"{project.Name}, v{project.Version}, ({nearest.GetShortFolderName()})");
+
+            ProjectRestoreMetadataFrameworkInfo resolvedTargetFramework =
+                project.RestoreMetadata.TargetFrameworks.Single(tf => nearest.Equals(tf.FrameworkName));
+
+            // project references of a targetFramework
+            foreach (ProjectRestoreReference projectRestoreReference in resolvedTargetFramework.ProjectReferences)
+            {
+                // TODO: PrivateAssets, ExcludeAssets, IncludeAssets
+                //dependency.ProjectPath
+                //dependency.ProjectUniqueName
+                PackageSpec projectDependency = dependencyGraph.GetProjectSpec(projectRestoreReference.ProjectUniqueName);
+
+                //Console.WriteLine($"({projectDependency.Name}, {Path.GetFileName(projectDependency.FilePath)}) is a project reference of ({project.Name}, {Path.GetFileName(project.FilePath)}");
+
+                // recursive
+                ReportProjectReferences(projectDependency, rootNuGetFramework, dependencyGraph, indentLevel + 1);
             }
         }
 
@@ -593,23 +684,59 @@ namespace Deps.CLI
         {
             const int INDENT_SIZE = 2;
 
+            // TODO: make option --full-graph
+            // TODO: VS has 3 kind of references
+            //      projects (Projects)
+            //      packages (NuGet)
+            //      sdk      (SDK)         Microsoft.NetCore.App, NetStandard.Library....(also System,* and Framework assemblies from here)
+            // We only want to show the first 2 categories of them (by default)
+            // TODO: Er dette OK?
             if (PACKAGE_PREFIXES_TO_IGNORE.Any(prefix => projectLibrary.Name.StartsWith(prefix)))
             {
                 return;
             }
 
-            //projectLibrary.Name
-            //projectLibrary.Framework
+            // projectLibrary has (Name, Framework, Version, Type, Dependencies, ...) attributes
+
+            // TODO: projectLibrary.Framework is empty
+            // TODO: Refactor this ugly code!!!
+            string tfm = null;
+            if (projectLibrary.RuntimeAssemblies.Count > 0 && projectLibrary.RuntimeAssemblies[0].Path.StartsWith("lib/"))
+            {
+                int pos = projectLibrary.RuntimeAssemblies[0].Path.IndexOf('/', 4);
+                if (pos >= 0)
+                    tfm = projectLibrary.RuntimeAssemblies[0].Path.Substring(4, pos - 4);
+            }
+            else
+            {
+                if (projectLibrary.CompileTimeAssemblies.Count > 0 && projectLibrary.CompileTimeAssemblies[0].Path.StartsWith("ref/"))
+                {
+                    int pos = projectLibrary.CompileTimeAssemblies[0].Path.IndexOf('/', 4);
+                    if (pos >= 0)
+                        tfm = projectLibrary.CompileTimeAssemblies[0].Path.Substring(4, pos - 4);
+                }
+                else
+                {
+                    if (projectLibrary.Build.Count > 0 && projectLibrary.Build[0].Path.StartsWith("build/"))
+                    {
+                        int pos = projectLibrary.Build[0].Path.IndexOf('/', 6);
+                        if (pos >= 0)
+                            tfm = projectLibrary.Build[0].Path.Substring(6, pos - 6);
+                    }
+                    else
+                    {
+                        tfm = "unknown";
+                    }
+                }
+            }
 
             // indent shows levels of the graph
             Console.Write(new string(' ', indentLevel * INDENT_SIZE));
-            Console.WriteLine($"{projectLibrary.Name}, v{projectLibrary.Version}");
+            Console.WriteLine($"{projectLibrary.Name}, v{projectLibrary.Version}, ({tfm})");
 
             if (!projectLibrary.Type.Equals("package", StringComparison.Ordinal))
             {
-                // TODO: Throw, Log error
-                Console.WriteLine($"UNEXPECTED: {projectLibrary.Type}, {projectLibrary.Name}, v{projectLibrary.Version}");
-                return;
+                throw new InvalidOperationException($"UNEXPECTED: {projectLibrary.Type}, {projectLibrary.Name}, v{projectLibrary.Version}");
             }
 
             foreach (PackageDependency dependencyReference in projectLibrary.Dependencies)
