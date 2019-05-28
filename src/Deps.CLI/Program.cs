@@ -11,7 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Deps.Core;
 using McMaster.Extensions.CommandLineUtils;
-using Microsoft.Extensions.Logging;
+//using Microsoft.Extensions.Logging;
 using NuGet.Common;
 using NuGet.Configuration;
 using NuGet.Frameworks;
@@ -23,7 +23,7 @@ using NuGet.Protocol;
 using NuGet.Protocol.Core.Types;
 using NuGet.Resolver;
 using NuGet.Versioning;
-using ILogger = Microsoft.Extensions.Logging.ILogger;
+//using ILogger = Microsoft.Extensions.Logging.ILogger;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace Deps.CLI
@@ -38,16 +38,17 @@ namespace Deps.CLI
     {
         public static int Main(string[] args) => CommandLineApplication.Execute<Program>(args);
 
-        private readonly ILogger _logger;
+        // TODO: define how we do logging...when feature complete
+        //private readonly ILogger _logger;
         // ReSharper disable once PrivateFieldCanBeConvertedToLocalVariable
-        private readonly ILoggerFactory _loggerFactory;
+        //private readonly ILoggerFactory _loggerFactory;
 
         public Program()
         {
 #pragma warning disable CS0618 // Type or member is obsolete
-            _loggerFactory = new LoggerFactory().AddConsole(Verbosity);
+            //_loggerFactory = new LoggerFactory().AddConsole(Verbosity);
 #pragma warning restore CS0618 // Type or member is obsolete
-            _logger = _loggerFactory.CreateLogger(typeof(Program));
+            //_logger = _loggerFactory.CreateLogger(typeof(Program));
         }
 
         [Option("-v|--verbosity <LEVEL>", Description =
@@ -136,7 +137,7 @@ namespace Deps.CLI
             if (!string.IsNullOrEmpty(Project))
                 AnalyzeProject(Project, Framework);
             else
-                AnalyzePackage(Package, Version, Framework, _logger, PackageSourceEnvironment.Brf); // TODO: move to param
+                AnalyzePackage(Package, Version, Framework, PackageSourceEnvironment.Brf); // TODO: move to param
         }
 
         [SuppressMessage("ReSharper", "PossibleMultipleEnumeration")]
@@ -144,7 +145,7 @@ namespace Deps.CLI
             string packageId,
             string version,
             string framework,
-            ILogger logger,
+            //ILogger logger,
             PackageSourceEnvironment packageSourceEnvironment)
         {
             var rootPackageIdentity = new PackageIdentity(packageId, NuGetVersion.Parse(version));
@@ -297,9 +298,7 @@ namespace Deps.CLI
 
                     var libItems = packageReader.GetLibItems();
 
-                    var reducer = new FrameworkReducer();
-                    // resolve the targetFramework of the items
-                    NuGetFramework nearest = reducer.GetNearest(rootNuGetFramework, libItems.Select(x => x.TargetFramework));
+                    NuGetFramework nearest = libItems.Select(x => x.TargetFramework).GetNearestFrameworkMatching(rootNuGetFramework);
 
                     // assembly references is a sequence of assembly names (file name including the extension)
                     var assemblyReferences = libItems
@@ -492,6 +491,10 @@ namespace Deps.CLI
         // 4. Construct LockFile from assets file for the project
         static void AnalyzeProject(string projectPath, string framework)
         {
+            // Graph input
+            var vertices = new HashSet<Node>();
+            var edges = new HashSet<Edge>();
+
             var rootNuGetFramework = NuGetFramework.ParseFolder(framework); // TODO: optional filter
 
             // TODO: HACK...kan fjernes
@@ -516,7 +519,10 @@ namespace Deps.CLI
             if (dependencyGraph.Projects.Any(p => p.RestoreMetadata.ProjectStyle != ProjectStyle.PackageReference))
                 throw new InvalidOperationException("Only SDK projects are supported.");
 
-            var projectRoot = dependencyGraph.Projects.Single(p => Path.GetFileName(p.FilePath) == Path.GetFileName(projectPath));
+            PackageSpec projectRoot = dependencyGraph.Projects.Single(p => Path.GetFileName(p.FilePath) == Path.GetFileName(projectPath));
+
+            var rootNode = new ProjectReferenceNode(projectPath, projectRoot.Version.ToString(), rootNuGetFramework);
+            vertices.Add(rootNode);
 
             var projectRootTargetFramework = projectRoot.TargetFrameworks.FirstOrDefault(tf => rootNuGetFramework.Equals(tf.FrameworkName));
 
@@ -564,11 +570,19 @@ namespace Deps.CLI
                     // TODO: PrivateAssets, ExcludeAssets, IncludeAssets
                     //dependency.ProjectPath
                     //dependency.ProjectUniqueName
-                    PackageSpec project = dependencyGraph.GetProjectSpec(projectRestoreReference.ProjectUniqueName);
+                    PackageSpec projectDependency = dependencyGraph.GetProjectSpec(projectRestoreReference.ProjectUniqueName);
 
                     //Console.WriteLine($"({project.Name}, {Path.GetFileName(project.FilePath)}) is a project reference of ({projectRoot.Name}, {Path.GetFileName(projectRoot.FilePath)}");
 
-                    ReportProjectReferences(project, rootNuGetFramework, dependencyGraph, 1);
+                    NuGetFramework nearest = projectDependency.GetNearestFrameworkMatching(rootNuGetFramework);
+                    var projectReference = new ProjectReferenceNode(projectDependency.FilePath, projectDependency.Version.ToString(), nearest);
+
+                    vertices.Add(projectReference);
+
+                    edges.Add(new Edge(rootNode, projectReference));
+
+                    ReportProjectReferences(rootNode, projectDependency, rootNuGetFramework, dependencyGraph, 1,
+                        vertices, edges);
                 }
             }
 
@@ -615,8 +629,7 @@ namespace Deps.CLI
                 //    }
                 //}
 
-                var reducer = new FrameworkReducer();
-                NuGetFramework nearest = reducer.GetNearest(rootNuGetFramework, project.TargetFrameworks.Select(x => x.FrameworkName));
+                NuGetFramework nearest = project.GetNearestFrameworkMatching(rootNuGetFramework);
 
                 TargetFrameworkInformation resolvedTargetFramework =
                     project.TargetFrameworks.Single(tf => nearest.Equals(tf.FrameworkName));
@@ -647,18 +660,20 @@ namespace Deps.CLI
         }
 
         // recursive
-        static void ReportProjectReferences(PackageSpec project, NuGetFramework rootNuGetFramework,
-            DependencyGraphSpec dependencyGraph, int indentLevel)
+        static void ReportProjectReferences(ProjectReferenceNode source, PackageSpec project, NuGetFramework rootNuGetFramework,
+            DependencyGraphSpec dependencyGraph, int indentLevel, HashSet<Node> vertices, HashSet<Edge> edges)
         {
             const int INDENT_SIZE = 2;
 
-            var reducer = new FrameworkReducer();
-            // resolve the targetFramework of the project references
-            NuGetFramework nearest = reducer.GetNearest(rootNuGetFramework, project.RestoreMetadata.TargetFrameworks.Select(x => x.FrameworkName));
+            NuGetFramework nearest = project.GetNearestFrameworkMatching(rootNuGetFramework);
+
+            // TODO: This is done be caller....delete
+            //var projectReference = new ProjectReferenceNode(project.FilePath, project.Version.ToString(), nearest);
+            //projects.Add(projectReference);
 
             // indent shows levels of the graph
             Console.Write(new string(' ', indentLevel * INDENT_SIZE));
-            Console.WriteLine($"{project.Name}, v{project.Version}, ({nearest.GetShortFolderName()})");
+            Console.WriteLine($"{project.RestoreMetadata.ProjectUniqueName}, v{project.Version}, ({nearest.GetShortFolderName()})");
 
             ProjectRestoreMetadataFrameworkInfo resolvedTargetFramework =
                 project.RestoreMetadata.TargetFrameworks.Single(tf => nearest.Equals(tf.FrameworkName));
@@ -671,10 +686,20 @@ namespace Deps.CLI
                 //dependency.ProjectUniqueName
                 PackageSpec projectDependency = dependencyGraph.GetProjectSpec(projectRestoreReference.ProjectUniqueName);
 
+                var projectDependencyReference = new ProjectReferenceNode(
+                    projectDependency.FilePath,
+                    projectDependency.Version.ToString(),
+                    projectDependency.GetNearestFrameworkMatching(rootNuGetFramework));
+
+                vertices.Add(projectDependencyReference);
+
+                edges.Add(new Edge(source, projectDependencyReference));
+
                 //Console.WriteLine($"({projectDependency.Name}, {Path.GetFileName(projectDependency.FilePath)}) is a project reference of ({project.Name}, {Path.GetFileName(project.FilePath)}");
 
                 // recursive
-                ReportProjectReferences(projectDependency, rootNuGetFramework, dependencyGraph, indentLevel + 1);
+                ReportProjectReferences(projectDependencyReference, projectDependency, rootNuGetFramework,
+                    dependencyGraph, indentLevel + 1, vertices, edges);
             }
         }
 

@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Linq;
 using NuGet.Configuration;
 using NuGet.Protocol;
@@ -78,11 +77,6 @@ namespace Deps.Tests
             };
 
             return packageSource;
-        }
-
-        static IEnumerable<PackageSource> GetPackageSources()
-        {
-            yield return new PackageSource("https://api.nuget.org/v3/index.json", "NuGet.org v3");
         }
     }
 }
