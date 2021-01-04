@@ -3,8 +3,11 @@
 .idea/
 .dotnet/
 
+# build output
 artifacts/
-tools/
+
+# local tools are installed here (dotnet new tool-manifest)
+.config/
 
 # debug settings contains MYGET_PASSWORD value in clear text
 launchSettings.json
