@@ -1,7 +1,9 @@
-$PSScriptRoot = split-path -parent $MyInvocation.MyCommand.Definition
+#!/usr/bin/env pwsh
 
-$ARTIFACTS_DIR = Join-Path $PSScriptRoot "artifacts"
-$TOOLS_DIR = Join-Path $PSScriptRoot "tools"
+$script_root = split-path -parent $MyInvocation.MyCommand.Definition
+
+$ARTIFACTS_DIR = Join-Path $script_root "artifacts"
+$TOOLS_DIR = Join-Path $script_root "tools"
 
 function Resolve-Version() {
     $GitVersionDir = (Get-ChildItem $TOOLS_DIR -Recurse | Where-Object { $_.PSIsContainer -and $_.Name.StartsWith("GitVersion.CommandLine") }).Name

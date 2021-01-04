@@ -1,16 +1,52 @@
-# EditorConfig is awesome: http://EditorConfig.org
+# EditorConfig is awesome: https://EditorConfig.org
 
 # top-most EditorConfig file
 root = true
 
-# Unix-style newlines with a newline ending every file
+# Don't use tabs for indentation.
 [*]
-end_of_line = crlf
-insert_final_newline = true
-charset = utf-8
 indent_style = space
-indent_size = 4
-trim_trailing_whitespace = true
+charset = utf-8
+# (Please don't specify an indent_size here; that has too many unintended consequences.)
 
-[*.{yml, yaml}]
+# Code files
+[*.{cs,csx}]
+indent_size = 4
+insert_final_newline = true
+# visual studio seems to have issues with utf-8
+charset = utf-8-bom
+
+# XML project files
+[*.{csproj,vbproj,vcxproj,vcxproj.filters,proj,projitems,shproj}]
 indent_size = 2
+
+# XML config files
+[*.{props,targets,ruleset,config,nuspec,resx,vsixmanifest,vsct}]
+indent_size = 2
+
+# JSON files
+[*.json]
+indent_size = 2
+
+# Powershell files
+[*.ps1]
+indent_size = 2
+
+# Shell script files
+[*.sh]
+end_of_line = lf
+indent_size = 2
+
+[*.nix]
+end_of_line = lf
+indent_size = 2
+
+[build.config]
+end_of_line = lf
+
+# YAML looks best with 2 spaces
+[*.{yml,yaml}]
+indent_size = 2
+
+[{.envrc}]
+end_of_line = lf

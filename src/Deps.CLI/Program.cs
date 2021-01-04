@@ -784,7 +784,7 @@ namespace Deps.CLI
 
         private static string GetRepoRootPath()
         {
-            string path = new Uri(Assembly.GetExecutingAssembly().CodeBase).LocalPath;
+            string path = new Uri(Assembly.GetExecutingAssembly().Location).LocalPath;
             while (true)
             {
                 path = Path.GetDirectoryName(path);

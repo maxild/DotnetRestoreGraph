@@ -1,13 +1,13 @@
 <Project>
     <PropertyGroup Label="Package Reference dependencies">
         <!-- JetBrains.Annotations -->
-        <JetBrainsAnnotationsPackageVersion>2018.2.1</JetBrainsAnnotationsPackageVersion>
+        <JetBrainsAnnotationsPackageVersion>2020.3.0</JetBrainsAnnotationsPackageVersion>
         <!-- McMaster.Extensions.CommandLineUtils -->
         <McMasterExtensionsCommandLineUtilsVersion>2.3.4</McMasterExtensionsCommandLineUtilsVersion>
         <!-- Microsoft.Extensions.Logging.Console -->
         <MicrosoftExtensionsLoggingConsoleVersion>2.2.0</MicrosoftExtensionsLoggingConsoleVersion>
         <!-- Microsoft.NET.Test.Sdk -->
-        <MicrosoftNETTestSdkPackageVersion>15.9.0</MicrosoftNETTestSdkPackageVersion>
+        <MicrosoftNETTestSdkPackageVersion>16.8.3</MicrosoftNETTestSdkPackageVersion>
         <!-- xunit -->
         <XUnitPackageVersion>2.4.1</XUnitPackageVersion>
         <!-- NuGet.Client libs -->

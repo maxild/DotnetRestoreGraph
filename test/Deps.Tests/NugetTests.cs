@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using System.Linq;
 using NuGet.Configuration;
 using NuGet.Protocol;
@@ -52,7 +54,9 @@ namespace Deps.Tests
         [Fact]
         public void CorrectGlobalPackagesFolder()
         {
-            Assert.Equal(@"C:\Users\br5904\.nuget\packages\", SettingsUtility.GetGlobalPackagesFolder(NullSettings.Instance));
+            string homeFolder = Environment.GetEnvironmentVariable("HOME");
+            string expected = Path.Combine(homeFolder, ".nuget", "packages");
+            Assert.Equal(expected + Path.DirectorySeparatorChar, SettingsUtility.GetGlobalPackagesFolder(NullSettings.Instance));
         }
 
         static PackageSource CreatePackageSource(string sourceUrl, string sourceName)
